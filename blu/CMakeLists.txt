@@ -41,7 +41,31 @@ include(tiny-json.cmake)
 set(MD5_PATH "${CMAKE_CURRENT_LIST_DIR}/../lib/md5")
 include(md5.cmake)
 
+########################################
+# pico_fota_bootloader options
+#
+# The bootloader adds a SHA256 of the image to every FOTA image, which the
+# application validates with pfb_firmware_sha256_check() before the update is
+# applied, so leave PFB_WITH_SHA256_HASHING on.
+#
+# AES image encryption is off by default: it additionally requires the pycryptodome
+# python package and a key which has to be kept in sync between the bootloader and
+# every future firmware build, e.g.
+#   cmake -DPFB_WITH_IMAGE_ENCRYPTION=ON -DPFB_AES_KEY=<key> ..
+########################################
+set(PFB_WITH_BOOTLOADER_LOGS ON CACHE BOOL "" FORCE)
+set(PFB_REDIRECT_BOOTLOADER_LOGS_TO_UART ON CACHE BOOL "" FORCE)
+set(PFB_WITH_IMAGE_ENCRYPTION OFF CACHE BOOL "" FORCE)
+set(PFB_WITH_SHA256_HASHING ON CACHE BOOL "" FORCE)
+
 add_subdirectory(pico_fota_bootloader)
+
+# The bootloader logs over the same UART pins as the application, so that a
+# single UART cable sees the whole boot sequence.
+target_compile_definitions(pico_fota_bootloader PRIVATE
+    PICO_DEFAULT_UART_RX_PIN=17
+    PICO_DEFAULT_UART_TX_PIN=16
+)
 
 add_subdirectory(src)
 

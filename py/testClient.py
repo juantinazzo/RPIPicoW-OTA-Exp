@@ -7,9 +7,11 @@ url = ('http://vmu22a:5000/srv')
 
 
 ##This redirects over HTTP so isn't actually a HTTP request
+##segSize has to be a multiple of 256, the bootloader can only write whole
+##flash pages
 
 data = {
-    'segSize': 500, 
+    'segSize': 512, 
     'segNum': 5
 }
 

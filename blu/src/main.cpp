@@ -23,7 +23,7 @@
 #include <md5.h>
 
 extern "C"{
-#include "pico_fota_bootloader.h"
+#include <pico_fota_bootloader/core.h>
 }
 
 
@@ -97,35 +97,56 @@ void runTimeStats(){
 
 
 char *buf = NULL;
-const size_t BUFLEN = 11000;
 const size_t SEGSIZE = 10240;
+// Room for a whole segment, the HTTP response headers and the up to 255 bytes
+// of zero padding the last segment of the image is written to flash with.
+const size_t BUFLEN = SEGSIZE + 1024;
 
 
+/***
+ * Download the FOTA image of the release named by \p url in SEGSIZE byte
+ * segments and write each segment into the bootloader's download slot.
+ */
 void otaUpdate(const char * url){
 	MD5 fullMD;
 	unsigned char md[16];
 	char segNum[10];
 	char segSize[10];
-	sprintf(segSize, "%d", SEGSIZE);
+	snprintf(segSize, sizeof(segSize), "%lu", (unsigned long) SEGSIZE);
 
 	buf = (char *)malloc(BUFLEN);
+	// Offset of the next byte to be written into the download slot. Always a
+	// multiple of PFB_ALIGN_SIZE.
+	size_t slotOffset = 0;
+	// Size of the image itself, without the zero padding added to the end of
+	// the download slot. This is the size pfb_firmware_sha256_check() expects.
+	size_t firmwareSize = 0;
 	int seg = 0;
 	int rec = 1;
 
-	pfb_initialize_download_slot();
+	int err = pfb_initialize_download_slot();
+	if (err){
+		printf("Failed to initialize download slot: %d\n", err);
+		free(buf);
+		return;
+	}
 
 	while (rec > 0){
 
 	  Request req(buf, BUFLEN);
 	  std::map<std::string, std::string> query;
 	  query["segSize"] = segSize;
-	  sprintf(segNum, "%d", seg);
+	  snprintf(segNum, sizeof(segNum), "%d", seg);
 	  query["segNum"] = segNum;
 	  if (!req.get(url, &query)){
 		  break;
 	  }
 	  printf("Seg %d Req Resp: %d : Len %u \t", seg, req.getStatusCode(), req.getPayloadLen());
 	  rec = req.getPayloadLen();
+	  if (rec == 0){
+		  printf("\n");
+		  break;
+	  }
 
 	  fullMD.update((const void *) req.getPayload(),  req.getPayloadLen());
 
@@ -139,17 +160,32 @@ void otaUpdate(const char * url){
 	  }
 	  printf("\n");
 
+	  // The bootloader can only write whole flash pages, so zero pad the last
+	  // segment of the image. The padding lands in the download slot but is not
+	  // part of the firmware image, so it is not counted in firmwareSize.
+	  uint8_t * payload = (uint8_t *) req.getPayload();
+	  size_t payloadLen = (size_t) req.getPayloadLen();
+	  size_t paddedLen = (payloadLen + PFB_ALIGN_SIZE - 1) & ~(size_t)(PFB_ALIGN_SIZE - 1);
+	  if (paddedLen > payloadLen){
+		  memset(&payload[payloadLen], 0, paddedLen - payloadLen);
+	  }
 
-	  pfb_write_to_flash_aligned_256_bytes(
-			  ( uint8_t *) req.getPayload(),
-			  seg * SEGSIZE,
-			  req.getPayloadLen());
+	  if (pfb_write_to_flash_aligned_256_bytes(payload, slotOffset, paddedLen)){
+		  printf("Failed to write segment %d to flash\n", seg);
+		  free(buf);
+		  pfb_mark_download_slot_as_invalid();
+		  return;
+	  }
+
+	  slotOffset += paddedLen;
+	  firmwareSize += payloadLen;
 	  seg++;
 	}
 
 	free(buf);
 
 
+	printf("Firmware size %lu\n", (unsigned long) firmwareSize);
 	printf("Full MD5: ");
 	fullMD.finalize( md );
 	for (int i=0; i < 16; i++){
@@ -161,7 +197,18 @@ void otaUpdate(const char * url){
 	}
 	printf("\n");
 
+	// The SHA256 is appended to every FOTA image by the bootloader build and
+	// has to match before the download slot is made valid.
+	if (pfb_firmware_sha256_check(firmwareSize)){
+		printf("SHA256 check FAILED\n");
+		pfb_mark_download_slot_as_invalid();
+		return;
+	}
+	printf("SHA256 check OK\n");
 
+	// Keep the new firmware over the rollback, then hand it over to the
+	// bootloader which swaps the partitions over on the next reset.
+	pfb_firmware_commit();
 	pfb_mark_download_slot_as_valid();
 	pfb_perform_update();
 }
@@ -200,6 +247,14 @@ void main_task(void* params){
   } else {
 	  printf("Old firmware\n");
   }
+
+  if (pfb_is_after_rollback()){
+	  printf("FIRMWARE ROLLED BACK, THE DOWNLOADED IMAGE DID NOT COMMIT\n");
+  }
+
+  // The firmware is up and talking, so tell the bootloader not to roll back
+  // the update it may have just performed.
+  pfb_firmware_commit();
 
   if (WifiHelper::init()){
     printf("Wifi Controller Initialised\n");

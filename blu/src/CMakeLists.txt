@@ -43,17 +43,18 @@ pico_add_extra_outputs(${NAME})
 pico_enable_stdio_usb(${NAME} 0)
 pico_enable_stdio_uart(${NAME} 1)
 target_compile_definitions(${NAME} PRIVATE
-    PICO_DEFAULT_UART_RX_PIN=16
-    PICO_DEFAULT_UART_TX_PIN=17
+    PICO_DEFAULT_UART_RX_PIN=17
+    PICO_DEFAULT_UART_TX_PIN=16
     RELEASE="BLU"
     OTA_URL="http://vmu22a.local.jondurrant.com:5000/grn"
     LED_GP=15
 )
 
-target_link_options(${NAME} PRIVATE 
-    "-L${CMAKE_CURRENT_SOURCE_DIR}/../pico_fota_bootloader/linker_common"
-    )
-    
-pico_set_linker_script(${NAME} 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../pico_fota_bootloader/linker_common/application.ld
-    )
+# Apply the bootloader's linker scripts (A/B slot layout) and add the post build
+# steps which create the <name>_fota_image.bin to be served to the device.
+pfb_compile_with_bootloader(${NAME})
+
+# The bootloader's linker scripts are a copy of the pico-sdk default one, but
+# they predate the C++ support for __dso_handle which the libstdc++ static
+# initialisers pulled in by the exceptions support need.
+target_link_options(${NAME} PRIVATE "-Wl,--defsym,__dso_handle=0")

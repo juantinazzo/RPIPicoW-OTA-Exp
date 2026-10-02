@@ -26,6 +26,27 @@ static StackType_t uxIdleTaskStack[ configMINIMAL_STACK_SIZE ];
     configMINIMAL_STACK_SIZE is specified in words, not bytes. */
     *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
 }
+/* In the FreeRTOS SMP port there is one active idle task, which does the
+housekeeping, plus configNUMBER_OF_CORES - 1 passive idle tasks, one per non
+tick core, so that every core always has something to run. */
+#if ( configNUMBER_OF_CORES > 1 )
+void vApplicationGetPassiveIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer,
+                                          StackType_t **ppxIdleTaskStackBuffer,
+                                          uint32_t *pulIdleTaskStackSize,
+                                          BaseType_t xPassiveIdleTaskIndex )
+{
+    static StaticTask_t xPassiveIdleTaskTCB[ configNUMBER_OF_CORES - 1 ];
+    static StackType_t uxPassiveIdleTaskStack[ configNUMBER_OF_CORES - 1 ][ configMINIMAL_STACK_SIZE ];
+
+    configASSERT( xPassiveIdleTaskIndex >= 0 );
+    configASSERT( xPassiveIdleTaskIndex < ( configNUMBER_OF_CORES - 1 ) );
+
+    *ppxIdleTaskTCBBuffer = &xPassiveIdleTaskTCB[ xPassiveIdleTaskIndex ];
+    *ppxIdleTaskStackBuffer = uxPassiveIdleTaskStack[ xPassiveIdleTaskIndex ];
+    *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+}
+#endif
+
 /* configSUPPORT_STATIC_ALLOCATION and configUSE_TIMERS are both set to 1, so the
 application must provide an implementation of vApplicationGetTimerTaskMemory()
 to provide the memory that is used by the Timer service task. */
